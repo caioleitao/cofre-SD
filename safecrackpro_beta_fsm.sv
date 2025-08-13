@@ -19,7 +19,7 @@ module sc (
 
     state_t state, next;
 
-    // Senha programável (3 etapas)
+    // Senha programável
     logic [3:0] passcode[2:0];
 
     // Contadores e flags
@@ -27,12 +27,12 @@ module sc (
     logic        locked;            // Flag de bloqueio ativo
     logic [31:0] timeout_counter;   // Contador para 10 segundos
 
-    // Constante para 10 segundos com clock de 100 MHz (DE2-115)
     localparam int TIMEOUT_MAX = 1_000_000_000; // 100 MHz * 10 s
 
-    // Lógica Sequencial
+    // BLOCO PRINCIPAL SEQUENCIAL
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
+            // Reset geral
             state <= S0;
             passcode[0] <= 4'b0111;
             passcode[1] <= 4'b1101;
@@ -42,63 +42,68 @@ module sc (
             timeout_counter <= 0;
         end
         else begin
-            // Se bloqueado, só conta tempo
             if (locked) begin
+                // Se bloqueado, ignora FSM e só conta tempo
                 if (timeout_counter < TIMEOUT_MAX) begin
                     timeout_counter <= timeout_counter + 1;
                 end
                 else begin
-                    locked <= 0;                 // Libera após 10s
+                    locked <= 0;                  // Libera após 10s
                     timeout_counter <= 0;
-                    error_count <= 0;            // Reseta contagem de erros
-                    state <= S0;                 // Volta ao início
+                    error_count <= 0;             // Zera erros
+                    state <= S0;                  // Volta ao início
                 end
             end
             else begin
-                // Atualiza o estado normal
+                // Atualiza FSM normalmente
                 state <= next;
 
-                // Lógica de programação da nova senha
+                // Programação de senha
                 case (state)
                     PROG_S0: if (|btn) passcode[0] <= btn;
                     PROG_S1: if (|btn) passcode[1] <= btn;
                     PROG_S2: if (|btn) passcode[2] <= btn;
                     default: ;
                 endcase
+
+                // ===== Contagem de erros =====
+                if ((state == S0 && |btn && btn != passcode[0]) ||
+                    (state == S1 && |btn && btn != passcode[1]) ||
+                    (state == S2 && |btn && btn != passcode[2])) begin
+                    if (error_count < 2)
+                        error_count <= error_count + 1;
+                    else begin
+                        locked <= 1;            // Bloqueia após 3 erros
+                        timeout_counter <= 0;   // Inicia temporizador
+                    end
+                end
+                else if ((state == S1 && btn == passcode[1]) ||
+                         (state == S2 && btn == passcode[2]) ||
+                         (state == S3)) begin
+                    error_count <= 0;           // Acertou, zera erros
+                end
             end
         end
     end
 
-    // Lógica Combinacional do estado
+    // Lógica Combinacional FSM
     always_comb begin
         next = state;
         if (!locked) begin
             case (state)
                 S0: begin
-                    if (btn == passcode[0]) begin
-                        next = S1;
-                    end
-                    else if (|btn) begin
-                        next = S0;
-                    end
+                    if (btn == passcode[0]) next = S1;
+                    else if (|btn) next = S0;
                 end
 
                 S1: begin
-                    if (btn == passcode[1]) begin
-                        next = S2;
-                    end
-                    else if (|btn) begin
-                        next = S0;
-                    end
+                    if (btn == passcode[1]) next = S2;
+                    else if (|btn) next = S0;
                 end
 
                 S2: begin
-                    if (btn == passcode[2]) begin
-                        next = S3;
-                    end
-                    else if (|btn) begin
-                        next = S0;
-                    end
+                    if (btn == passcode[2]) next = S3;
+                    else if (|btn) next = S0;
                 end
 
                 S3: begin
@@ -115,35 +120,10 @@ module sc (
         end
     end
 
-    // Contagem de erros (incrementa somente se não bloqueado)
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst) begin
-            error_count <= 0;
-            locked <= 0;
-        end
-        else if (!locked) begin
-            if ((state == S0 && |btn && btn != passcode[0]) ||
-                (state == S1 && |btn && btn != passcode[1]) ||
-                (state == S2 && |btn && btn != passcode[2])) begin
-                if (error_count < 2)
-                    error_count <= error_count + 1;
-                else begin
-                    locked <= 1;           // Ativa bloqueio na 3ª tentativa errada
-                    timeout_counter <= 0;  // Zera contador do bloqueio
-                end
-            end
-            else if ((state == S1 && btn == passcode[1]) ||
-                     (state == S2 && btn == passcode[2]) ||
-                     (state == S3)) begin
-                error_count <= 0;          // Reseta erros se acertar
-            end
-        end
-    end
-
     // Saídas
     always_comb begin
         unlocked = (state == S3);
-        led = locked;  // LED acende se bloqueado
+        lock_led = locked;  // LED vermelho acende no bloqueio
     end
 
 endmodule
